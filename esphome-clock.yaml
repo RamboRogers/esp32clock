@@ -1,0 +1,135 @@
+esphome:
+  name: bedroom
+  platform: esp32
+  board: esp32dev
+
+# Enable logging
+logger:
+  logs:
+    component: ERROR
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "SET YOUR API KEY"
+  services:
+    - service: play_rtttl
+      variables:
+        song_str: string
+      then:
+        - rtttl.play:
+            rtttl: !lambda 'return song_str;'
+    - service: display_message
+      variables:
+        message: string
+      then:
+        - lambda: |-
+            id(display_text).publish_state(message);
+        - delay: 60s
+        - lambda: |-
+            id(display_text).publish_state("");
+
+ota:
+  - platform: esphome
+    password: "SET YOUR PASSWORD"
+
+wifi:
+  ssid: "SET YOUR SSID"
+  password: "SET YOUR KEY"
+
+# Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "bedroom Fallback Hotspot"
+    password: "SET RANDOM"
+
+i2c:
+   sda: 21
+   scl: 22
+   scan: true
+   frequency: 50kHz
+
+sensor:
+  - platform: dht
+    model: DHT22
+    pin: GPIO5
+    temperature:
+      name: "Bed Room Temperature"
+      id: bed_room_temperature
+    humidity:
+      name: "Bed Room Humidity"
+      id: bed_room_humidity
+    update_interval: 30s
+
+  - platform: homeassistant
+    entity_id: sensor.krdu_temperature
+    id: krdu_temperature
+    name: "KRDU Temperature"
+
+# Import the binary sensor state from Home Assistant
+binary_sensor:
+  - platform: homeassistant
+    id: ha_ping_status
+    entity_id: binary_sensor.8_8_8_8
+
+# Time component
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "America/New_York"
+
+# Text sensor to display the status on the LCD
+text_sensor:
+  - platform: template
+    id: ping_result
+    name: "Ping Result"
+    lambda: |-
+      if (id(ha_ping_status).state) {
+        return {"Online"};
+      } else {
+        return {"Offline"};
+      }
+
+# Text sensor to store and display the message
+  - platform: template
+    id: display_text
+    name: "Display Text"
+
+display:
+  - platform: lcd_pcf8574
+    id: my_lcd
+    address: 0x27
+    dimensions: 20x4  # Adjusted for 4 lines
+    update_interval: 2000ms  # Set the display to update every second
+    lambda: |-
+      // Display Date and Time on the first line
+      it.strftime(0, 0, "%Y-%m-%d %H:%M:%S", id(sntp_time).now());
+
+      // Display Ping Status on Line 2
+      it.print(0, 1, "Status: ");
+      it.print(8, 1, id(ping_result).state.c_str());
+
+      // Combine Temperature and Humidity on a single line
+      char buffer[20];
+      float fahrenheit = (id(bed_room_temperature).state * 9.0 / 5.0) + 32.0;
+      snprintf(buffer, sizeof(buffer), "T: %4.1fF H: %4.1f%%", fahrenheit, id(bed_room_humidity).state);
+      it.print(0, 2, buffer);
+
+      // Conditionally display message or KRDU Temperature on Line 4
+      if (strlen(id(display_text).state.c_str()) > 0) {
+        it.print(0, 3, id(display_text).state.c_str());
+      } else {
+        snprintf(buffer, sizeof(buffer), "KRDU Temp: %4.1fF", id(krdu_temperature).state);
+        it.print(0, 3, buffer);
+      }
+
+output:
+  - platform: ledc
+    pin: GPIO18  # Using GPIO18 (D18) for the buzzer
+    id: rtttl_out
+
+rtttl:
+  output: rtttl_out
+  on_finished_playback:
+    - logger.log: 'Song ended!'
+
+captive_portal:
